@@ -1,0 +1,110 @@
+version: '3'
+
+services:
+  wp:
+    image: wordpress:latest # https://hub.docker.com/_/wordpress/
+    container_name: wp-wordpress
+    restart: always
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./wordpress-config/php.conf.ini:/usr/local/etc/php/conf.d/conf.ini
+      - ./wordpress:/var/www/html # Full wordpress project
+      #- ./plugin-name/trunk/:/var/www/html/wp-content/plugins/plugin-name # Plugin development
+      #- ./theme-name/trunk/:/var/www/html/wp-content/themes/theme-name # Theme development
+    environment:
+      WORDPRESS_DB_HOST: db
+      WORDPRESS_DB_NAME: "${DB_NAME}"
+      WORDPRESS_DB_USER: root
+      WORDPRESS_DB_PASSWORD: "${DB_ROOT_PASSWORD}"
+    depends_on:
+      - db
+    links:
+      - db
+    networks:
+      - wordpress-network
+
+  non-ssl-nginx:
+    image: nginx:latest
+    container_name: non-ssl-nginx
+    ports:
+      - "80:80"
+    environment:
+      DOMAIN: ${DOMAIN}
+    restart: always
+    volumes:
+      - ./config/certbot/conf/:/etc/nginx/ssl
+      - ./config/certbot/data:/var/www/html
+      # Push the correct nginx.conf template to the docker container
+      - ./config/nginx/non-ssl-nginx.conf:/etc/nginx/conf.d/site.template
+    networks:
+      - wordpress-network
+    depends_on:
+      - wp
+    # Command environment substitutes $Domain from .env file and replaces nginx.conf with the provided template
+    command: /bin/bash -c "envsubst '$${DOMAIN}' < /etc/nginx/conf.d/site.template > /etc/nginx/nginx.conf && nginx -g 'daemon off;'"      
+  
+  ssl-nginx:
+    image: nginx:latest
+    container_name: ssl-nginx
+    ports:
+      - "81:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    restart: always
+    volumes:
+      - ./config/certbot/conf/:/etc/nginx/ssl
+      - ./config/certbot/data:/var/www/html
+      # Push the correct nginx.conf template to the docker container
+      - ./config/nginx/ssl-nginx.conf:/etc/nginx/conf.d/site.template
+    networks:
+      - wordpress-network
+    depends_on:
+      - wp
+      - certbot
+    # Command environment substitutes $Domain from .env file and replaces nginx.conf with the provided template
+    command: /bin/bash -c "envsubst '$${DOMAIN}' < /etc/nginx/conf.d/site.template > /etc/nginx/nginx.conf && nginx -g 'daemon off;'"
+
+  certbot:
+    environment:
+      EMAIL: ${EMAIL}
+      DOMAIN: ${DOMAIN}
+    depends_on:
+      - non-ssl-nginx
+    image: certbot/certbot
+    container_name: certbot
+    volumes:
+      - ./config/certbot/conf:/etc/letsencrypt
+      - ./config/certbot/logs:/var/log/letsencrypt
+      - ./config/certbot/data:/var/www/html
+    # Remove "--dry-run" from the command to generate actual certificate
+    # ONLY DO THIS AFTER YOU HAVE MADE SURE IT WORKS
+    command: certonly --webroot --webroot-path=/var/www/html -i ngnix --redirect --dry-run --hsts --email $EMAIL --agree-tos --staple-ocsp -d $DOMAIN -d www.$DOMAIN 
+
+
+  db:
+    image: mysql:latest # https://hub.docker.com/_/mysql/ - or mariadb https://hub.docker.com/_/mariadb
+    container_name: wp-database
+    ports:
+      - 3306:3306 # change ip if required
+    command: [
+        '--default_authentication_plugin=mysql_native_password',
+        '--character-set-server=utf8mb4',
+        '--collation-server=utf8mb4_unicode_ci'
+    ]
+    volumes:
+      - /home/$USER/wordpress/wp-data:/docker-entrypoint-initdb.d
+      - db_data:/var/lib/mysql
+    environment:
+      MYSQL_DATABASE: "${DB_NAME}"
+      MYSQL_ROOT_PASSWORD: "${DB_ROOT_PASSWORD}"
+    networks:
+      - wordpress-network
+
+volumes:
+  db_data:
+
+networks:
+  wordpress-network: 
+    driver: bridge 

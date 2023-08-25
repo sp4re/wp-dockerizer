@@ -1,0 +1,6 @@
+.env
+.git
+.dockeringore
+/wordpress
+/wordpress-config
+/config/certbot/
